@@ -160,13 +160,27 @@ func (r *Filler) QuadBezierF(sgm Rasterx, b, c fixed.Point26_6) {
 		return
 	}
 	sgm.joinF()
-	QuadTo(float32(r.a.X), float32(r.a.Y), // Pts are x64, but does not matter.
-		float32(b.X), float32(b.Y),
-		float32(c.X), float32(c.Y),
-		func(dx, dy float32) {
-			sgm.lineF(fixed.Point26_6{X: fixed.Int26_6(dx), Y: fixed.Int26_6(dy)})
-		})
-
+	ax, ay := float32(r.a.X), float32(r.a.Y)
+	bx, by := float32(b.X), float32(b.Y)
+	cx, cy := float32(c.X), float32(c.Y)
+	devsq := devSquared(ax, ay, bx, by, cx, cy)
+	if devsq >= 0.333 {
+		const tol = 3
+		n := 1 + int(math.Sqrt(math.Sqrt(tol*float64(devsq))))
+		t, nInv := float32(0), 1/float32(n)
+		for i := 0; i < n-1; i++ {
+			t += nInv
+			mt := 1 - t
+			t1 := mt * mt
+			t2 := mt * t * 2
+			t3 := t * t
+			sgm.lineF(fixed.Point26_6{
+				X: fixed.Int26_6(ax*t1 + bx*t2 + cx*t3),
+				Y: fixed.Int26_6(ay*t1 + by*t2 + cy*t3),
+			})
+		}
+	}
+	sgm.lineF(c)
 }
 
 // CubeBezier adds a cubic bezier to the curve
@@ -199,13 +213,34 @@ func (r *Filler) CubeBezierF(sgm Rasterx, b, c, d fixed.Point26_6) {
 		return
 	}
 	sgm.joinF()
-	CubeTo(float32(r.a.X), float32(r.a.Y),
-		float32(b.X), float32(b.Y),
-		float32(c.X), float32(c.Y),
-		float32(d.X), float32(d.Y),
-		func(ex, ey float32) {
-			sgm.lineF(fixed.Point26_6{X: fixed.Int26_6(ex), Y: fixed.Int26_6(ey)})
-		})
+	ax, ay := float32(r.a.X), float32(r.a.Y)
+	bx, by := float32(b.X), float32(b.Y)
+	cx, cy := float32(c.X), float32(c.Y)
+	dx, dy := float32(d.X), float32(d.Y)
+	devsq := devSquared(ax, ay, bx, by, dx, dy)
+	if devsqAlt := devSquared(ax, ay, cx, cy, dx, dy); devsq < devsqAlt {
+		devsq = devsqAlt
+	}
+	if devsq >= 0.333 {
+		const tol = 3
+		n := 1 + int(math.Sqrt(math.Sqrt(tol*float64(devsq))))
+		t, nInv := float32(0), 1/float32(n)
+		for i := 0; i < n-1; i++ {
+			t += nInv
+			tsq := t * t
+			mt := 1 - t
+			mtsq := mt * mt
+			t1 := mtsq * mt
+			t2 := mtsq * t * 3
+			t3 := mt * tsq * 3
+			t4 := tsq * t
+			sgm.lineF(fixed.Point26_6{
+				X: fixed.Int26_6(ax*t1 + bx*t2 + cx*t3 + dx*t4),
+				Y: fixed.Int26_6(ay*t1 + by*t2 + cy*t3 + dy*t4),
+			})
+		}
+	}
+	sgm.lineF(d)
 }
 
 // Clear resets the filler
