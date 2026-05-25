@@ -36,6 +36,12 @@ type (
 		Offset    float64
 		Opacity   float64
 	}
+	// fastStop is a pre-digested GradStop for the hot per-pixel path.
+	fastStop struct {
+		offset  float64
+		opacity float64
+		r, g, b uint32
+	}
 	// Gradient holds a description of an SVG 2.0 gradient
 	Gradient struct {
 		Points   [5]float64
@@ -45,6 +51,8 @@ type (
 		Spread   SpreadMethod
 		Units    GradientUnits
 		IsRadial bool
+
+		stopCache []fastStop
 	}
 )
 
@@ -58,100 +66,107 @@ func ApplyOpacity(c color.Color, opacity float64) color.NRGBA {
 // returns a color depending on the spreadMethod value of the gradient and
 // the gradient's slice of stop values.
 func (g *Gradient) tColor(t, opacity float64) color.Color {
-	d := len(g.Stops)
-	// These cases can be taken care of early on
-	if t >= 1.0 && g.Spread == PadSpread {
-		s := g.Stops[d-1]
-		return ApplyOpacity(s.StopColor, s.Opacity*opacity)
-	}
-	if t <= 0.0 && g.Spread == PadSpread {
-		return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
+	d := len(g.stopCache)
+	if d == 0 {
+		return color.NRGBA{0, 0, 0, 0}
 	}
 
-	var modRange = 1.0
-	if g.Spread == ReflectSpread {
-		modRange = 2.0
-	}
-	mod := math.Mod(t, modRange)
-	if mod < 0 {
-		mod += modRange
-	}
-
-	place := 0 // Advance to place where mod is greater than the indicated stop
-	for place != len(g.Stops) && mod > g.Stops[place].Offset {
-		place++
-	}
 	switch g.Spread {
-	case RepeatSpread:
-		var s1, s2 GradStop
-		switch place {
-		case 0, d:
-			s1, s2 = g.Stops[d-1], g.Stops[0]
-		default:
-			s1, s2 = g.Stops[place-1], g.Stops[place]
+	case PadSpread:
+		if t >= 1.0 {
+			s := g.stopCache[d-1]
+			return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 		}
-		return g.blendStops(mod, opacity, s1, s2, false)
-	case ReflectSpread:
+		if t <= 0.0 {
+			s := g.stopCache[0]
+			return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
+		}
+		place := sort.Search(d, func(i int) bool {
+			return g.stopCache[i].offset >= t
+		})
 		switch place {
 		case 0:
-			return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
+			s := g.stopCache[0]
+			return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 		case d:
-			// Advance to place where mod-1 is greater than the stop indicated by place in reverse of the stop slice.
-			// Since this is the reflect spead mode, the mod interval is two, allowing the stop list to be
-			// iterated in reverse before repeating the sequence.
-			for place != d*2 && mod-1 > (1-g.Stops[d*2-place-1].Offset) {
+			s := g.stopCache[d-1]
+			return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
+		default:
+			return blendStops(t, opacity, g.stopCache[place-1], g.stopCache[place], false)
+		}
+	case RepeatSpread:
+		mod := math.Mod(t, 1.0)
+		if mod < 0 {
+			mod += 1.0
+		}
+		place := sort.Search(d, func(i int) bool {
+			return g.stopCache[i].offset >= mod
+		})
+		var s1, s2 fastStop
+		switch place {
+		case 0, d:
+			s1, s2 = g.stopCache[d-1], g.stopCache[0]
+		default:
+			s1, s2 = g.stopCache[place-1], g.stopCache[place]
+		}
+		return blendStops(mod, opacity, s1, s2, false)
+	case ReflectSpread:
+		mod := math.Mod(t, 2.0)
+		if mod < 0 {
+			mod += 2.0
+		}
+		place := 0
+		for place != d && mod > g.stopCache[place].offset {
+			place++
+		}
+		switch place {
+		case 0:
+			s := g.stopCache[0]
+			return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
+		case d:
+			for place != d*2 && mod-1 > (1-g.stopCache[d*2-place-1].offset) {
 				place++
 			}
 			switch place {
 			case d:
-				s := g.Stops[d-1]
-				return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+				s := g.stopCache[d-1]
+				return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 			case d * 2:
-				return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
+				s := g.stopCache[0]
+				return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 			default:
-				return g.blendStops(mod-1, opacity,
-					g.Stops[d*2-place], g.Stops[d*2-place-1], true)
+				return blendStops(mod-1, opacity,
+					g.stopCache[d*2-place], g.stopCache[d*2-place-1], true)
 			}
 		default:
-			return g.blendStops(mod, opacity,
-				g.Stops[place-1], g.Stops[place], false)
-		}
-	default: // PadSpread
-		switch place {
-		case 0:
-			return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
-		case len(g.Stops):
-			s := g.Stops[len(g.Stops)-1]
-			return ApplyOpacity(s.StopColor, s.Opacity*opacity)
-		default:
-			return g.blendStops(mod, opacity, g.Stops[place-1], g.Stops[place], false)
+			return blendStops(mod, opacity, g.stopCache[place-1], g.stopCache[place], false)
 		}
 	}
+	return color.NRGBA{0, 0, 0, 0}
 }
 
-func (g *Gradient) blendStops(t, opacity float64, s1, s2 GradStop, flip bool) color.Color {
-	s1off := s1.Offset
-	if s1.Offset > s2.Offset && !flip { // happens in repeat spread mode
+func blendStops(t, opacity float64, s1, s2 fastStop, flip bool) color.NRGBA {
+	s1off := s1.offset
+	if s1.offset > s2.offset && !flip { // happens in repeat spread mode
 		s1off--
 		if t > 1 {
 			t--
 		}
 	}
-	if s2.Offset == s1off {
-		return ApplyOpacity(s2.StopColor, s2.Opacity)
+	if s2.offset == s1off {
+		return color.NRGBA{uint8(s2.r), uint8(s2.g), uint8(s2.b), uint8(s2.opacity * 0xFF)}
 	}
 	if flip {
 		t = 1 - t
 	}
-	tp := (t - s1off) / (s2.Offset - s1off)
-	r1, g1, b1, _ := s1.StopColor.RGBA()
-	r2, g2, b2, _ := s2.StopColor.RGBA()
-
-	return ApplyOpacity(color.RGBA{
-		uint8((float64(r1)*(1-tp) + float64(r2)*tp) / 256),
-		uint8((float64(g1)*(1-tp) + float64(g2)*tp) / 256),
-		uint8((float64(b1)*(1-tp) + float64(b2)*tp) / 256),
-		0xFF}, (s1.Opacity*(1-tp)+s2.Opacity*tp)*opacity)
+	tp := (t - s1off) / (s2.offset - s1off)
+	inv := 1 - tp
+	return color.NRGBA{
+		R: uint8((float64(s1.r)*inv + float64(s2.r)*tp) / 256),
+		G: uint8((float64(s1.g)*inv + float64(s2.g)*tp) / 256),
+		B: uint8((float64(s1.b)*inv + float64(s2.b)*tp) / 256),
+		A: uint8((s1.opacity*inv + s2.opacity*tp) * opacity * 0xFF),
+	}
 }
 
 //GetColorFunction returns the color function
@@ -163,6 +178,7 @@ func (g *Gradient) GetColorFunction(opacity float64) interface{} {
 // It is safe to call repeatedly; if the stops are already sorted it returns immediately.
 func (g *Gradient) ensureSorted() {
 	if len(g.Stops) < 2 {
+		g.buildStopCache()
 		return
 	}
 	for i := 1; i < len(g.Stops); i++ {
@@ -170,7 +186,26 @@ func (g *Gradient) ensureSorted() {
 			sort.Slice(g.Stops, func(i, j int) bool {
 				return g.Stops[i].Offset < g.Stops[j].Offset
 			})
-			return
+			break
+		}
+	}
+	g.buildStopCache()
+}
+
+// buildStopCache pre-computes fastStop values from g.Stops.
+func (g *Gradient) buildStopCache() {
+	if len(g.stopCache) == len(g.Stops) {
+		return
+	}
+	g.stopCache = make([]fastStop, len(g.Stops))
+	for i, s := range g.Stops {
+		r, gv, b, _ := s.StopColor.RGBA()
+		g.stopCache[i] = fastStop{
+			offset:  s.Offset,
+			opacity: s.Opacity,
+			r:       r,
+			g:       gv,
+			b:       b,
 		}
 	}
 }
@@ -253,14 +288,14 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) inter
 
 				t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
 				if intersects == false { //In this case, use the last stop color
-					s := g.Stops[len(g.Stops)-1]
-					return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+					s := g.stopCache[len(g.stopCache)-1]
+					return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 				}
 				tdx, tdy := t1x-fx, t1y-fy
 				dx, dy := ex-fx, ey-fy
 				if tdx*tdx+tdy*tdy < epsilonF {
-					s := g.Stops[len(g.Stops)-1]
-					return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+					s := g.stopCache[len(g.stopCache)-1]
+					return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 				}
 				return g.tColor(math.Sqrt(dx*dx+dy*dy)/math.Sqrt(tdx*tdx+tdy*tdy), opacity)
 			})
@@ -273,14 +308,14 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) inter
 
 			t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
 			if intersects == false { //In this case, use the last stop color
-				s := g.Stops[len(g.Stops)-1]
-				return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+				s := g.stopCache[len(g.stopCache)-1]
+				return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 			}
 			tdx, tdy := t1x-fx, t1y-fy
 			dx, dy := ex-fx, ey-fy
 			if tdx*tdx+tdy*tdy < epsilonF {
-				s := g.Stops[len(g.Stops)-1]
-				return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+				s := g.stopCache[len(g.stopCache)-1]
+				return color.NRGBA{uint8(s.r), uint8(s.g), uint8(s.b), uint8(s.opacity * opacity * 0xFF)}
 			}
 			return g.tColor(math.Sqrt(dx*dx+dy*dy)/math.Sqrt(tdx*tdx+tdy*tdy), opacity)
 		})
