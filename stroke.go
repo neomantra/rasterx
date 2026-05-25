@@ -288,7 +288,7 @@ func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
 		((r.JoinMode == Arc || r.JoinMode == ArcClip) && (rt == 0 && rl == 0)) {
 		xt := CalcIntersect(s1.Sub(p.TTan), s1, s2, s2.Sub(p.LTan))
 		xa := xt.Sub(p.P)
-		if Length(xa) < r.mLimit { // within miter limit
+		if Length2(xa) < int64(r.mLimit)*int64(r.mLimit) { // within miter limit
 			ra.Line(xt)
 			ra.Line(s2)
 			return
@@ -323,7 +323,7 @@ func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
 			if intersect {
 				ray1, ray2 := xt.Sub(cl), s2.Sub(cl)
 				clockwise := (ray1.X*ray2.Y > ray1.Y*ray2.X) // Sign of xprod
-				if Length(p.P.Sub(xt)) < r.mLimit {          // within miter limit
+				if Length2(p.P.Sub(xt)) < int64(r.mLimit)*int64(r.mLimit) { // within miter limit
 					strokeArc(ra, cl, xt, s2, clockwise, 0, 0, ra.Line)
 					ra.Line(s2)
 					return
@@ -368,7 +368,7 @@ func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
 			if intersect {
 				ray1, ray2 := s1.Sub(ct), xt.Sub(ct)
 				clockwise := ray1.X*ray2.Y > ray1.Y*ray2.X
-				if Length(p.P.Sub(xt)) < r.mLimit { // within miter limit
+				if Length2(p.P.Sub(xt)) < int64(r.mLimit)*int64(r.mLimit) { // within miter limit
 					strokeArc(ra, ct, s1, xt, clockwise, 0, 0, ra.Line)
 					ra.Line(s2)
 					return
@@ -413,7 +413,7 @@ func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
 				ray1, ray2 = xt.Sub(cl), s2.Sub(cl)
 				clockwiseL := ray1.X*ray2.Y > ray1.Y*ray2.X
 
-				if Length(p.P.Sub(xt)) < r.mLimit { // within miter limit
+				if Length2(p.P.Sub(xt)) < int64(r.mLimit)*int64(r.mLimit) { // within miter limit
 					strokeArc(ra, ct, s1, xt, clockwiseT, 0, 0, ra.Line)
 					strokeArc(ra, cl, xt, s2, clockwiseL, 0, 0, ra.Line)
 					ra.Line(s2)
@@ -593,7 +593,15 @@ func (r *Stroker) lineF(b fixed.Point26_6) {
 	if b == r.leadPoint.P { // End of segment
 		bnorm = r.leadPoint.TNorm // Use more accurate leadPoint tangent
 	} else {
-		bnorm = turnPort90(ToLength(b.Sub(a), r.u)) // Intra segment normal
+		ba := b.Sub(a)
+		segLen := Length(ba)
+		if segLen != 0 {
+			ratio := float64(r.u) / float64(segLen)
+			bnorm = turnPort90(fixed.Point26_6{
+				X: fixed.Int26_6(float64(ba.X) * ratio),
+				Y: fixed.Int26_6(float64(ba.Y) * ratio),
+			})
+		}
 	}
 	ra := &r.Filler
 	ra.Start(b.Sub(bnorm))

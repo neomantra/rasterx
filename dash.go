@@ -56,21 +56,38 @@ func (r *Dasher) lineF(b fixed.Point26_6) {
 	a := r.a // Copy local a since r.a is going to change during stroke operation
 	ba := b.Sub(a)
 	segLen := Length(ba)
+	origSegLen := segLen
 	var nlt fixed.Int26_6
 	if b == r.leadPoint.P { // End of segment
 		bnorm = r.leadPoint.TNorm // Use more accurate leadPoint tangent
-	} else {
-		bnorm = turnPort90(ToLength(b.Sub(a), r.u)) // Intra segment normal
+	} else if origSegLen != 0 {
+		ratio := float64(r.u) / float64(origSegLen)
+		bnorm = turnPort90(fixed.Point26_6{
+			X: fixed.Int26_6(float64(ba.X) * ratio),
+			Y: fixed.Int26_6(float64(ba.Y) * ratio),
+		})
 	}
-	for segLen+r.deltaDash > r.Dashes[r.dashPlace] {
-		nl := r.Dashes[r.dashPlace] - r.deltaDash
+	dashes := r.Dashes
+	ndashes := len(dashes)
+	for segLen+r.deltaDash > dashes[r.dashPlace] {
+		nl := dashes[r.dashPlace] - r.deltaDash
 		nlt += nl
-		r.dashLineStrokeBit(a.Add(ToLength(ba, nlt)), bnorm, false)
+		var pt fixed.Point26_6
+		if origSegLen != 0 {
+			ratio := float64(nlt) / float64(origSegLen)
+			pt = fixed.Point26_6{
+				X: a.X + fixed.Int26_6(float64(ba.X)*ratio),
+				Y: a.Y + fixed.Int26_6(float64(ba.Y)*ratio),
+			}
+		} else {
+			pt = a
+		}
+		r.dashLineStrokeBit(pt, bnorm, false)
 		r.dashIsGap = !r.dashIsGap
 		segLen -= nl
 		r.deltaDash = 0
 		r.dashPlace++
-		if r.dashPlace == len(r.Dashes) {
+		if r.dashPlace == ndashes {
 			r.dashPlace = 0
 		}
 	}

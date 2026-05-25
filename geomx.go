@@ -38,6 +38,13 @@ func Length(v fixed.Point26_6) fixed.Int26_6 {
 	return fixed.Int26_6(math.Sqrt(vx*vx + vy*vy))
 }
 
+// Length2 returns the squared distance from the origin of the point.
+// It is useful when only a comparison is needed, avoiding a math.Sqrt call.
+func Length2(v fixed.Point26_6) int64 {
+	vx, vy := int64(v.X), int64(v.Y)
+	return vx*vx + vy*vy
+}
+
 //PathCommand is the type for the path command token
 type PathCommand fixed.Int26_6
 
