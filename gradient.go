@@ -159,7 +159,23 @@ func (g *Gradient) GetColorFunction(opacity float64) interface{} {
 	return g.GetColorFunctionUS(opacity, Identity)
 }
 
-//GetColorFunctionUS returns the color function using the User Space objMatrix
+// ensureSorted sorts the stops by offset in ascending order.
+// It is safe to call repeatedly; if the stops are already sorted it returns immediately.
+func (g *Gradient) ensureSorted() {
+	if len(g.Stops) < 2 {
+		return
+	}
+	for i := 1; i < len(g.Stops); i++ {
+		if g.Stops[i].Offset < g.Stops[i-1].Offset {
+			sort.Slice(g.Stops, func(i, j int) bool {
+				return g.Stops[i].Offset < g.Stops[j].Offset
+			})
+			return
+		}
+	}
+}
+
+// GetColorFunctionUS returns the color function using the User Space objMatrix
 func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) interface{} {
 	switch len(g.Stops) {
 	case 0:
@@ -168,10 +184,7 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) inter
 		return ApplyOpacity(g.Stops[0].StopColor, opacity) // Illegal, I think, should really should not happen.
 	}
 
-	// sort by offset in ascending order
-	sort.Slice(g.Stops, func(i, j int) bool {
-		return g.Stops[i].Offset < g.Stops[j].Offset
-	})
+	g.ensureSorted()
 
 	w, h := float64(g.Bounds.W), float64(g.Bounds.H)
 	oriX, oriY := float64(g.Bounds.X), float64(g.Bounds.Y)
